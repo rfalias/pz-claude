@@ -523,6 +523,29 @@ All server-side `print()` and errors go to `Logs/<timestamp>_DebugLog-server.txt
 
 ## Miscellaneous Engine Behavior
 
+### `getText(key, ...)` has a low, undocumented cap on substitution arguments
+
+The Lua binding for `getText` is reflection-based (`MultiLuaJavaInvoker`), and there is **no overload for an unlimited number of substitution arguments** — pass too many and the call throws at runtime, not at parse/load time:
+
+```
+java.lang.RuntimeException: No implementation found for function: getText(class java.lang.String IGUI_SomeKey, class java.lang.Double 0.0, ...)
+```
+
+Confirmed via a live crash: a translation key that had grown to 5 substitution params (`getText(key, a, b, c, d, e)`, 6 total arguments) failed outright, while the highest-arity call confirmed working elsewhere used 4 substitution params (5 total arguments). This shows up in **`console.txt`** (client-side text-building code) or the server debug log (server-side), not in your mod's own log file — search for `No implementation found for function: getText` if a UI action silently does nothing or the client throws right when you'd expect a toast/dialog to appear.
+
+**Fix:** once a message needs more than ~4 dynamic values, stop growing the getText call's argument list. Pre-build the variable part as a plain Lua string first (`string.format`, using `%d`/`%s` — NOT `%1`/`%2`, that's getText's own distinct substitution syntax), store it in its own translation key containing that Lua-format template, then pass the single resulting string as one argument to the outer getText call:
+
+```lua
+-- Translation keys:
+-- "MyMod_SummaryFormat": "%d apples, %d oranges, and %d pears"
+-- "MyMod_ResultMessage": "You collected: %1. Well done!"
+
+local summary = string.format(getText("MyMod_SummaryFormat"), appleCount, orangeCount, pearCount)
+local message = getText("MyMod_ResultMessage", summary)
+```
+
+This also scales cleanly if you keep adding more fields to the summary later — you're growing `string.format`'s argument list (Lua's own, uncapped), not getText's.
+
 ### Floating world labels — rebuild every 500ms
 
 Floating labels attached to world objects (via `IsoCell.setLabel()` or similar) get wiped when the player opens and closes the Escape menu. If you want persistent floating labels, rebuild them on a timer (every 500ms works well) via `Events.OnTick` or similar, not just once on chunk load.
